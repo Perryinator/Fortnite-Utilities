@@ -90,3 +90,228 @@ def get_rarity_tier(rarity):
     }
     
     return rarity_tiers.get(rarity, 0)
+
+import random
+import os
+from fortnite_utils import WEAPON_TYPES, RARITY_SCORES, get_rarity_tier
+
+# Check if OpenAI API is available
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+# Try to import OpenAI if API key is available
+if OPENAI_API_KEY:
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        OPENAI_AVAILABLE = True
+    except ImportError:
+        OPENAI_AVAILABLE = False
+else:
+    OPENAI_AVAILABLE = False
+
+# Common Fortnite strategies and patterns
+COMMON_STRATEGIES = {
+    "Aggressive": {
+        "pattern": {"AR": 3, "Shotgun": 4, "SMG": 4, "Sniper": 0, "Heals": 2},
+        "description": "You have an aggressive loadout focused on close to medium combat. This is great for pushing enemies and taking fights."
+    },
+    "Defensive": {
+        "pattern": {"AR": 3, "Shotgun": 2, "SMG": 0, "Sniper": 4, "Heals": 4},
+        "description": "Your loadout is defense-oriented with long-range capabilities. Good for holding positions and surviving late game."
+    },
+    "Balanced": {
+        "pattern": {"AR": 3, "Shotgun": 3, "SMG": 2, "Sniper": 3, "Heals": 3},
+        "description": "You have a well-balanced loadout that can handle most situations. This is a versatile approach for all game phases."
+    },
+    "Sniper Focus": {
+        "pattern": {"AR": 2, "Shotgun": 1, "SMG": 0, "Sniper": 5, "Heals": 3},
+        "description": "Your loadout emphasizes sniping with good supporting weapons. Great for picking off enemies from a distance."
+    },
+    "Close Combat": {
+        "pattern": {"AR": 2, "Shotgun": 5, "SMG": 5, "Sniper": 0, "Heals": 2},
+        "description": "This loadout specializes in close-quarters combat. Perfect for box fights and building battles."
+    }
+}
+
+def get_common_strategies(loadout):
+    """
+    Identify if the loadout matches any common strategy patterns.
+    
+    Args:
+        loadout (dict): Dictionary mapping weapon types to rarities
+        
+    Returns:
+        str: Description of matching strategy or None
+    """
+    current_pattern = {weapon: get_rarity_tier(rarity) for weapon, rarity in loadout.items()}
+    
+    # Calculate similarity scores for each strategy
+    similarity_scores = {}
+    
+    for strategy_name, strategy_info in COMMON_STRATEGIES.items():
+        pattern = strategy_info["pattern"]
+        
+        # Simple similarity score (how many weapons have similar or better tiers)
+        matches = 0
+        total = len(WEAPON_TYPES)
+        
+        for weapon in WEAPON_TYPES:
+            if current_pattern[weapon] >= pattern[weapon] - 1:
+                matches += 1
+        
+        similarity = matches / total
+        similarity_scores[strategy_name] = similarity
+    
+    # Find best matching strategy (if any is over 0.7 similarity)
+    best_strategy = max(similarity_scores.items(), key=lambda x: x[1])
+    
+    if best_strategy[1] >= 0.7:
+        return COMMON_STRATEGIES[best_strategy[0]]["description"]
+    else:
+        return "Your loadout doesn't match any common strategy pattern. You may have a unique approach!"
+
+def get_upgrade_suggestions(loadout):
+    """
+    Generate suggestions for upgrading the loadout.
+    
+    Args:
+        loadout (dict): Dictionary mapping weapon types to rarities
+        
+    Returns:
+        str: Suggestions for loadout improvements
+    """
+    suggestions = []
+    
+    # Find the weakest items in the loadout
+    sorted_items = sorted(
+        [(weapon, rarity) for weapon, rarity in loadout.items()],
+        key=lambda x: RARITY_SCORES[x[1]]
+    )
+    
+    # Suggest upgrades for the lowest rated items
+    for weapon, rarity in sorted_items[:2]:
+        if rarity != "Gold (Legendary)":
+            suggestions.append(f"Consider upgrading your {weapon} to a higher rarity if possible.")
+    
+    # Check for strategic gaps
+    if loadout["Heals"] == "None":
+        suggestions.append("You don't have any healing items. Consider adding some for survivability.")
+    
+    if all(loadout[weapon] == "None" for weapon in ["AR", "SMG"]):
+        suggestions.append("You're missing medium-range weapons (AR or SMG). This could be a disadvantage in many fights.")
+    
+    if all(loadout[weapon] == "None" for weapon in ["Shotgun", "SMG"]):
+        suggestions.append("You don't have close-range weapons. This could be a problem in build fights or endgame.")
+    
+    if len(suggestions) == 0:
+        return "Your loadout looks well-balanced! No specific suggestions at this time."
+    
+    return "\n".join(suggestions)
+
+def get_ai_recommendation(loadout, user_query, score):
+    """
+    Generate AI-based recommendations for the loadout.
+    Uses OpenAI if available, otherwise falls back to pattern-based recommendations.
+    
+    Args:
+        loadout (dict): Dictionary mapping weapon types to rarities
+        user_query (str): The user's question or request
+        score (int): The calculated loadout score
+        
+    Returns:
+        str: AI recommendation response
+    """
+    # If OpenAI is available, use it for recommendations
+    if OPENAI_AVAILABLE:
+        try:
+            # Format the loadout information for the API request
+            loadout_desc = ", ".join([f"{weapon}: {rarity}" for weapon, rarity in loadout.items()])
+            
+            # Construct the prompt
+            prompt = f"""
+            As a Fortnite expert, I'm analyzing this loadout:
+            
+            {loadout_desc}
+            
+            Overall loadout score: {score}%
+            
+            User question: {user_query}
+            
+            Please provide a helpful response about this Fortnite loadout, considering weapon effectiveness, 
+            synergy between weapons, and potential improvements. Be specific and concise.
+            """
+            
+            # the newest OpenAI model is "gpt-4o" which was released May 13, 2024.
+            # do not change this unless explicitly requested by the user
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=350,
+                temperature=0.7
+            )
+            
+            return response.choices[0].message.content.strip()
+            
+        except Exception as e:
+            # Fallback to pattern-based recommendations if OpenAI fails
+            print(f"Error with OpenAI API: {e}")
+            return fallback_recommendation(loadout, user_query, score)
+    else:
+        # Use fallback recommendations if OpenAI is not available
+        return fallback_recommendation(loadout, user_query, score)
+
+def fallback_recommendation(loadout, user_query, score):
+    """
+    Fallback recommendation system when OpenAI is not available.
+    
+    Args:
+        loadout (dict): Dictionary mapping weapon types to rarities
+        user_query (str): The user's question or request
+        score (int): The calculated loadout score
+        
+    Returns:
+        str: Recommendation response
+    """
+    # Check what the user is asking about
+    user_query_lower = user_query.lower()
+    
+    # Check for specific weapon queries
+    for weapon in WEAPON_TYPES:
+        if weapon.lower() in user_query_lower:
+            rarity = loadout[weapon]
+            
+            if rarity == "None":
+                return f"You don't currently have a {weapon}. Consider adding one to your loadout for more versatility."
+            
+            if RARITY_SCORES[rarity] < 60:
+                return f"Your {rarity} {weapon} is decent but could be upgraded. Try to find at least a Blue (Rare) version for better performance."
+            else:
+                return f"Your {rarity} {weapon} is strong! This will serve you well in combat situations."
+    
+    # General loadout rating
+    if "rate" in user_query_lower or "score" in user_query_lower or "how good" in user_query_lower:
+        if score >= 80:
+            return f"Your loadout is excellent with a score of {score}%! You have high-rarity weapons that should give you a significant advantage in fights."
+        elif score >= 60:
+            return f"Your loadout is good with a score of {score}%. You have decent weapons, but there's still room for improvement by finding higher rarity items."
+        elif score >= 40:
+            return f"Your loadout is average with a score of {score}%. Consider looking for higher rarity weapons to improve your chances."
+        else:
+            return f"Your loadout needs improvement with a score of {score}%. Try to find better weapons as soon as possible to increase your chances of winning."
+    
+    # Improvement suggestions
+    if "improve" in user_query_lower or "better" in user_query_lower or "upgrade" in user_query_lower:
+        return get_upgrade_suggestions(loadout)
+    
+    # Strategy analysis
+    if "strategy" in user_query_lower or "playstyle" in user_query_lower:
+        strategy = get_common_strategies(loadout)
+        return f"{strategy}\n\nYour overall loadout score is {score}%."
+    
+    # Default response
+    return (
+        f"Your loadout has a score of {score}%. " +
+        get_upgrade_suggestions(loadout) +
+        "\n\nFeel free to ask more specific questions about your loadout!"
+    )
+
